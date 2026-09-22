@@ -6,64 +6,63 @@ const messages = require('../../constants/messages');
 
 const createOrder = async (userId, items) => {
   const session = await mongoose.startSession();
-  session.startTransaction();
+  let orderResult;
 
   try {
-    const orderItems = [];
-    let totalAmount = 0;
+    await session.withTransaction(async () => {
+      const orderItems = [];
+      let totalAmount = 0;
 
-    for (const item of items) {
-      const { productId, quantity } = item;
+      for (const item of items) {
+        const { productId, quantity } = item;
 
-      // Use atomic conditional update to ensure stock doesn't go below zero
-      const updatedProduct = await Product.findOneAndUpdate(
-        {
-          _id: productId,
-          stockQuantity: { $gte: quantity }
-        },
-        {
-          $inc: { stockQuantity: -quantity }
-        },
-        { new: true, session }
-      );
+        // Use atomic conditional update to ensure stock doesn't go below zero
+        const updatedProduct = await Product.findOneAndUpdate(
+          {
+            _id: productId,
+            stockQuantity: { $gte: quantity }
+          },
+          {
+            $inc: { stockQuantity: -quantity }
+          },
+          { new: true, session }
+        );
 
-      if (!updatedProduct) {
-        // Find out if product exists but out of stock, or doesn't exist
-        const productExists = await Product.findById(productId).session(session);
-        if (!productExists) {
-          throw new ApiError(404, `Product with ID ${productId} not found`);
-        } else {
-          throw new ApiError(400, `Insufficient stock for product: ${productExists.name}`);
+        if (!updatedProduct) {
+          // Find out if product exists but out of stock, or doesn't exist
+          const productExists = await Product.findById(productId).session(session);
+          if (!productExists) {
+            throw new ApiError(404, `Product with ID ${productId} not found`);
+          } else {
+            throw new ApiError(400, `Insufficient stock for product: ${productExists.name}`);
+          }
         }
+
+        const subtotal = updatedProduct.price * quantity;
+        totalAmount += subtotal;
+
+        orderItems.push({
+          product: updatedProduct._id,
+          name: updatedProduct.name,
+          price: updatedProduct.price,
+          quantity,
+          subtotal
+        });
       }
 
-      const subtotal = updatedProduct.price * quantity;
-      totalAmount += subtotal;
+      const [order] = await Order.create([{
+        user: userId,
+        items: orderItems,
+        totalAmount
+      }], { session });
 
-      orderItems.push({
-        product: updatedProduct._id,
-        name: updatedProduct.name,
-        price: updatedProduct.price,
-        quantity,
-        subtotal
-      });
-    }
-
-    const [order] = await Order.create([{
-      user: userId,
-      items: orderItems,
-      totalAmount
-    }], { session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return order;
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    throw error;
+      orderResult = order;
+    });
+  } finally {
+    await session.endSession();
   }
+
+  return orderResult;
 };
 
 const getMyOrders = async (userId) => {
