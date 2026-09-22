@@ -9,7 +9,7 @@ const { generateToken } = require('../src/utils/jwt');
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
 
 require('dotenv').config();
-jest.setTimeout(120000); // Increased timeout to 120s for MongoDB binary download
+jest.setTimeout(30000);
 
 let tokenUserA;
 let userA;
@@ -31,8 +31,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await mongoose.connection.dropDatabase();
-  await mongoose.connection.close();
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.connection.dropDatabase();
+    await mongoose.disconnect();
+  }
   if (replSet) {
     await replSet.stop();
   }
